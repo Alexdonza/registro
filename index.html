@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Registro - Mi Sitio Web</title>
+    <!-- IMPORTANTE: Cargar Supabase JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         * {
             margin: 0;
@@ -149,6 +151,26 @@
             display: none;
         }
 
+        /* Espaciado para el mensaje del servidor */
+        .server-message {
+            margin: 0 30px 20px 30px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+        }
+        .server-message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .server-message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
         @media (max-width: 480px) {
             .form-group {
                 padding: 15px 20px;
@@ -167,6 +189,9 @@
             <p>Regístrate para acceder a todos los beneficios</p>
         </div>
         
+        <!-- Contenedor para mensajes de éxito/error del servidor -->
+        <div id="serverMessage" class="server-message"></div>
+
         <div class="form-group">
             <form id="registerForm">
                 <div class="input-group">
@@ -198,7 +223,7 @@
                     <label for="terms">Acepto los <a href="#" style="color: #667eea;">Términos y Condiciones</a></label>
                 </div>
                 
-                <button type="submit" class="btn-register">Registrarse</button>
+                <button type="submit" class="btn-register" id="submitBtn">Registrarse</button>
             </form>
         </div>
         
@@ -208,13 +233,91 @@
     </div>
 
     <script>
-        document.getElementById('registerForm').addEventListener('submit', function(e) {
+        // --- CONFIGURACIÓN SUPABASE ---
+        // Estas son las credenciales que proporcionaste
+        const SUPABASE_URL = 'https://zhuoqkegvnaxspncdjmf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_sKIijun4QqPKkKcNiSzi8Q_egOEWTy2';
+        
+        // Inicializar cliente de Supabase
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        // Helper para mostrar mensajes al usuario
+        function showMessage(message, type = 'error') {
+            const msgDiv = document.getElementById('serverMessage');
+            msgDiv.textContent = message;
+            msgDiv.className = `server-message ${type}`;
+            msgDiv.style.display = 'block';
+            
+            // Ocultar mensaje después de 5 segundos
+            setTimeout(() => {
+                msgDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        // Función para registrar usuario en Supabase (tabla "users")
+        async function registerUser(email, fullname, password) {
+            try {
+                // 1. Crear usuario en Supabase Auth (sistema de autenticación)
+                // Esto genera un usuario con email y password, y devuelve un ID único.
+                const { data: authData, error: authError } = await supabase.auth.signUp({
+                    email: email,
+                    password: password,
+                    options: {
+                        data: {
+                            full_name: fullname   // Guardamos metadata adicional
+                        }
+                    }
+                });
+                
+                if (authError) {
+                    throw new Error(`Error en autenticación: ${authError.message}`);
+                }
+                
+                // Si el registro en Auth fue exitoso, obtenemos el user_id
+                const userId = authData.user?.id;
+                if (!userId) {
+                    throw new Error('No se pudo obtener el ID del usuario');
+                }
+                
+                // 2. Insertar un registro en la tabla 'users' con los datos adicionales
+                // Nota: asumimos que la tabla 'users' tiene al menos las columnas: id, email, fullname, created_at
+                // Si tu tabla tiene diferentes nombres de columna, ajústalos.
+                const { data: insertData, error: insertError } = await supabase
+                    .from('users')
+                    .insert([
+                        {
+                            id: userId,          // Relacionamos con el ID de auth
+                            email: email,
+                            fullname: fullname,  // O 'full_name' según tu esquema
+                            created_at: new Date()
+                        }
+                    ])
+                    .select();
+                    
+                if (insertError) {
+                    // Si falla la inserción en la tabla, opcionalmente podrías eliminar el usuario de Auth
+                    // para mantener consistencia, pero por simplicidad solo lanzamos error.
+                    console.error('Error al insertar en tabla users:', insertError);
+                    throw new Error(`Error al guardar datos del perfil: ${insertError.message}`);
+                }
+                
+                return { success: true, data: insertData };
+                
+            } catch (error) {
+                console.error('Error detallado:', error);
+                return { success: false, error: error.message };
+            }
+        }
+        
+        // --- MANEJO DEL FORMULARIO ---
+        document.getElementById('registerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            // Limpiar mensajes de error
+            // Limpiar mensajes anteriores
             document.querySelectorAll('.error-message').forEach(msg => {
                 msg.style.display = 'none';
             });
+            document.getElementById('serverMessage').style.display = 'none';
             
             let isValid = true;
             
@@ -250,14 +353,34 @@
             // Validar términos
             const terms = document.getElementById('terms').checked;
             if (!terms) {
-                alert('Por favor acepta los términos y condiciones');
+                showMessage('Por favor acepta los términos y condiciones', 'error');
                 isValid = false;
             }
             
-            if (isValid) {
-                alert('¡Registro exitoso! Bienvenido ' + fullname);
-                // Aquí puedes agregar la lógica para enviar los datos al servidor
-                // this.submit();
+            if (!isValid) return;
+            
+            // Deshabilitar botón mientras se procesa
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Registrando...';
+            
+            // Intentar registrar en Supabase
+            const result = await registerUser(email, fullname, password);
+            
+            // Re-habilitar botón
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Registrarse';
+            
+            if (result.success) {
+                // Registro exitoso
+                showMessage(`¡Registro exitoso! Bienvenido ${fullname}. Revisa tu correo para confirmar tu cuenta (si es necesario).`, 'success');
+                // Opcional: limpiar formulario o redirigir
+                document.getElementById('registerForm').reset();
+                // Podrías redirigir después de unos segundos:
+                // setTimeout(() => { window.location.href = 'login.html'; }, 3000);
+            } else {
+                // Mostrar error específico de Supabase
+                showMessage(`Error al registrar: ${result.error}`, 'error');
             }
         });
         
@@ -274,6 +397,20 @@
         document.getElementById('password').addEventListener('input', function() {
             if (this.value.length >= 6) {
                 document.getElementById('passwordError').style.display = 'none';
+            }
+        });
+        
+        // Para que el mensaje de email se oculte al escribir
+        document.getElementById('email').addEventListener('input', function() {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (emailRegex.test(this.value.trim())) {
+                document.getElementById('emailError').style.display = 'none';
+            }
+        });
+        
+        document.getElementById('fullname').addEventListener('input', function() {
+            if (this.value.trim() !== '') {
+                document.getElementById('nameError').style.display = 'none';
             }
         });
     </script>
